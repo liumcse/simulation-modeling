@@ -2,7 +2,6 @@ from libs.event import Event
 from libs.input_analysis import InputAnalyzer
 from libs.random_number_generator import RandomNumberGenerator as RNG
 from libs.output_analysis import OutputAnalyzer
-from matplotlib import pyplot as plt
 import numpy as np
 from scipy import stats
 import heapq
@@ -31,7 +30,7 @@ class Simulator:
         # Number of events
         self.no_events_total = no_events_total
         # Channels
-        self.no_free_channel = [9 for _ in range(21)]  # Index 0 is not used; only [1 ... 20] is used
+        self.no_free_channel = [10 for _ in range(21)]  # Index 0 is not used; only [1 ... 20] is used
         self.no_reserved = no_reserved
         self.stochastic = stochastic
         # Event list (a priority queue)
@@ -43,10 +42,6 @@ class Simulator:
         self.index = index
 
     def run(self):
-        """
-        Run the simulation
-        :return:
-        """
         if not self.stochastic:
             inter_arrival_time_list, base_station_list, duration_list, speed_list = InputAnalyzer.get_input_from_file()
             total_event_count = len(inter_arrival_time_list)
@@ -69,8 +64,7 @@ class Simulator:
         while len(self.event_list) > 0:
             idx += 1
             # Deque event from list until it is empty
-            front = heapq.heappop(self.event_list)
-            self.handle_event(front)
+            self.handle_event(heapq.heappop(self.event_list))
             # Add next initialization event
             if idx < total_event_count:
                 # Set system clock to arrival time of the last initialized call
@@ -93,11 +87,7 @@ class Simulator:
             self.no_call_created - self.warm_up_events) * 100
         return drop_rate, block_rate
 
-    # def should_terminate(self, remaining_time: float, time_to_handover: float, next_station: int):
-    #     return remaining_time <= time_to_handover or next_station == 0 or next_station == 21
-
     def handle_event(self, event: Event):
-        # print("Handle event", event.event_type, "arrived at", event.arrival_time)
         if event.event_type == "INITIALIZATION":
             self.handle_initialization(time=event.arrival_time,
                                        speed=event.speed,
@@ -111,6 +101,9 @@ class Simulator:
                                  station=event.station,
                                  duration=event.duration,
                                  direction=event.direction)
+        elif event.event_type == "TERMINATION":
+            self.handle_termination(time=event.arrival_time,
+                                    station=event.station)
         else:
             raise Exception("Unknown event type")
         # Update statistics
@@ -142,27 +135,36 @@ class Simulator:
         # Decide whether to terminate the call
         if duration <= time_to_handover:
             # Finishing call
-            self.no_free_channel[station] += 1
-            self.no_terminated_call += 1
+            heapq.heappush(self.event_list, Event(
+                event_type="TERMINATION",
+                arrival_time=self.clock + duration,
+                station=station,
+                duration=0,
+                direction=direction,
+                speed=speed
+            ))
             return
         elif next_station == 0 or next_station == 21:
             # Leaving highway
-            self.no_free_channel[station] += 1
-            self.no_terminated_call += 1
+            heapq.heappush(self.event_list, Event(
+                event_type="TERMINATION",
+                arrival_time=self.clock + time_to_handover,
+                station=station,
+                duration=0,
+                direction=direction,
+                speed=speed
+            ))
             return
         # Schedule the next handover
-        next_event = Event(event_type="HANDOVER",
-                           arrival_time=self.clock + time_to_handover,
-                           station=next_station,
-                           duration=duration - time_to_handover,
-                           direction=direction,
-                           speed=speed,
-                           )
-        # self.event_list.append(next_event)
-        heapq.heappush(self.event_list, next_event)
+        heapq.heappush(self.event_list, Event(event_type="HANDOVER",
+                                              arrival_time=self.clock + time_to_handover,
+                                              station=next_station,
+                                              duration=duration - time_to_handover,
+                                              direction=direction,
+                                              speed=speed,
+                                              ))
 
     def handle_handover(self, time: float, speed: float, station: int, duration: float, direction: str):
-        # Update system clock
         self.clock = time
         if direction == "LEFT":
             last_station = station + 1
@@ -178,40 +180,46 @@ class Simulator:
             # If no free channel, drop the call
             self.no_dropped_call += 1
             return
-        if self.no_free_channel[station] < 0:
-            raise Exception("Something went wrong")
+        # Allocate a channel from current station
+        self.no_free_channel[station] -= 1
         # Plan the next handover
         time_to_handover = 2 / speed * 3600  # Hour to second
         # Decide whether to terminate the call
         if duration <= time_to_handover:
-            # Leaving highway
-            self.no_terminated_call += 1
+            # Finishing call
+            heapq.heappush(self.event_list, Event(
+                event_type="TERMINATION",
+                arrival_time=self.clock + duration,
+                station=station,
+                duration=0,
+                direction=direction,
+                speed=speed
+            ))
             return
         elif next_station == 0 or next_station == 21:
-            # Finishing call
-            self.no_terminated_call += 1
+            # Leaving highway
+            heapq.heappush(self.event_list, Event(
+                event_type="TERMINATION",
+                arrival_time=self.clock + time_to_handover,
+                station=station,
+                duration=0,
+                direction=direction,
+                speed=speed
+            ))
             return
-        # Allocate a channel from current station
-        self.no_free_channel[station] -= 1
         # Schedule the next handover
-        next_event = Event(event_type="HANDOVER",
-                           arrival_time=self.clock + time_to_handover,
-                           station=next_station,
-                           duration=duration - time_to_handover,
-                           direction=direction,
-                           speed=speed,
-                           )
-        # self.event_list.append(next_event)
-        heapq.heappush(self.event_list, next_event)
+        heapq.heappush(self.event_list, Event(event_type="HANDOVER",
+                                              arrival_time=self.clock + time_to_handover,
+                                              station=next_station,
+                                              duration=duration - time_to_handover,
+                                              direction=direction,
+                                              speed=speed,
+                                              ))
 
-    def plot(self):
-        plt.plot(self.drop_rate_list, label="Percentage of dropped calls",
-                 color="green")
-        plt.plot(self.block_rate_list, label="Percentage of blocked calls",
-                 color="red")
-        plt.title("Summary Measure Of Single Simulation")
-        plt.legend()
-        plt.show()
+    def handle_termination(self, time: float, station: int):
+        self.clock = time
+        self.no_free_channel[station] += 1
+        self.no_terminated_call += 1
 
 
 def confidence_interval(data, confidence=0.95):
@@ -227,20 +235,20 @@ if __name__ == "__main__":
     block_rate_list = []
     no_events_total = 10000
     no_reserved = 0
-    iteration = 100
+    iteration = 1
     output_analyzer = OutputAnalyzer(no_events_total, no_iteration=iteration)
     for i in range(iteration):
         print("Running simulation #" + str(i + 1))
         simulator = Simulator(index=i, no_events_total=no_events_total, output_analyzer=output_analyzer,
-                              no_reserved=no_reserved, warm_up_events=2000, stochastic=True)
+                              no_reserved=no_reserved, warm_up_events=0, stochastic=True)
         drop_rate, block_rate = simulator.run()
         # simulator.plot()
         drop_rate_list.append(drop_rate)
         block_rate_list.append(block_rate)
     mean_drop_rate = np.mean(drop_rate_list)
     mean_block_rate = np.mean(block_rate_list)
-    variance_drop_rate = stats.sem(drop_rate_list)
-    variance_block_rate = stats.sem(block_rate_list)
+    variance_drop_rate = np.std(drop_rate_list)
+    variance_block_rate = np.std(block_rate_list)
     confidence_interval_drop_rate = confidence_interval(data=drop_rate_list)
     confidence_interval_block_rate = confidence_interval(data=block_rate_list)
     print("Mean block rate {:.3f}%, standard deviation {:.3f}, 95% confidence interval [{:.3f}, {:.3f}]".format(
